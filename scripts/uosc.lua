@@ -1,6 +1,6 @@
 --[[
 
-uosc 2.13.2 - 2021-Apr-26 | https://github.com/darsain/uosc
+uosc 2.17.0 - 2022-Apr-30 | https://github.com/darsain/uosc
 
 Minimalist cursor proximity based UI for MPV player.
 
@@ -73,6 +73,15 @@ menu_hjkl_navigation=no
 menu_opacity=0.8
 menu_font_scale=1
 
+# menu button widget
+# can be: never, bottom-bar, center
+menu_button=never
+menu_button_size=26
+menu_button_size_fullscreen=30
+menu_button_persistency=
+menu_button_opacity=1
+menu_button_border=1
+
 # top bar with window controls and media title
 # can be: never, no-border, always
 top_bar=no-border
@@ -120,6 +129,8 @@ subtitle_types=aqt,gsub,jss,sub,ttxt,pjs,psb,rt,smi,slt,ssf,srt,ssa,ass,usf,idx,
 # if you are using some wide font and see a lot of right side clipping in menus,
 # try bumping this up
 font_height_to_letter_width_ratio=0.5
+# default open-file menu directory
+default_directory=~/
 
 # `chapter_ranges` lets you transform chapter indicators into range indicators.
 #
@@ -170,6 +181,7 @@ Available keybindings (place into `input.conf`):
 Key  script-binding uosc/peek-timeline
 Key  script-binding uosc/toggle-progress
 Key  script-binding uosc/flash-timeline
+Key  script-binding uosc/flash-top-bar
 Key  script-binding uosc/flash-volume
 Key  script-binding uosc/flash-speed
 Key  script-binding uosc/flash-pause-indicator
@@ -238,7 +250,7 @@ local options = {
 
 	speed = false,
 	speed_size = 46,
-	speed_size_fullscreen = 68,
+	speed_size_fullscreen = 60,
 	speed_persistency = '',
 	speed_opacity = 1,
 	speed_step = 0.1,
@@ -250,6 +262,13 @@ local options = {
 	menu_hjkl_navigation = false,
 	menu_opacity = 0.8,
 	menu_font_scale = 1,
+
+	menu_button = 'never',
+	menu_button_size = 26,
+	menu_button_size_fullscreen = 30,
+	menu_button_opacity = 1,
+	menu_button_persistency = '',
+	menu_button_border = 1,
 
 	top_bar = 'no-border',
 	top_bar_size = 40,
@@ -278,11 +297,14 @@ local options = {
 	media_types = '3gp,asf,avi,bmp,flac,flv,gif,h264,h265,jpeg,jpg,m4a,m4v,mid,midi,mkv,mov,mp3,mp4,mp4a,mp4v,mpeg,mpg,oga,ogg,ogm,ogv,opus,png,rmvb,svg,tif,tiff,wav,weba,webm,webp,wma,wmv',
 	subtitle_types = 'aqt,gsub,jss,sub,ttxt,pjs,psb,rt,smi,slt,ssf,srt,ssa,ass,usf,idx,vt',
 	font_height_to_letter_width_ratio = 0.5,
+	default_directory = '~/',
 	chapter_ranges = '^op| op$|opening<968638:0.5>.*, ^ed| ed$|^end|ending$<968638:0.5>.*|{eof}, sponsor start<3535a5:.5>sponsor end, segment start<3535a5:0.5>segment end',
 }
 opt.read_options(options, 'uosc')
 local config = {
-	render_delay = 0.03, -- sets max rendering frequency
+	-- sets max rendering frequency in case the
+	-- native rendering frequency could not be detected
+	render_delay = 1/60,
 	font = mp.get_property('options/osd-font'),
 	menu_parent_opacity = 0.4,
 	menu_min_width = 260
@@ -309,7 +331,7 @@ local state = {
 	media_title = '',
 	duration = nil,
 	position = nil,
-	pause = false,
+	pause = mp.get_property_native('pause'),
 	chapters = nil,
 	chapter_ranges = nil,
 	border = mp.get_property_native('border'),
@@ -328,6 +350,7 @@ local state = {
 	end),
 	mouse_bindings_enabled = false,
 	cached_ranges = nil,
+	render_delay = config.render_delay,
 }
 local forced_key_bindings -- defined at the bottom next to events
 
@@ -1317,6 +1340,23 @@ end
 function icons.volume(pos_x, pos_y, size) return icons._volume(false, pos_x, pos_y, size) end
 function icons.volume_muted(pos_x, pos_y, size) return icons._volume(true, pos_x, pos_y, size) end
 
+function icons.menu_button(pos_x, pos_y, size)
+	local ass = assdraw.ass_new()
+	local scale = size / 100
+	function x(number) return pos_x + (number * scale) end
+	function y(number) return pos_y + (number * scale) end
+	local line_height = 14
+	local line_spacing = 18
+	for i = -1, 1 do
+	local offs = i * (line_height + line_spacing)
+		ass:move_to(x(-50), y(offs - line_height/2))
+		ass:line_to(x(50), y(offs - line_height/2))
+		ass:line_to(x(50), y(offs + line_height/2))
+		ass:line_to(x(-50), y(offs + line_height/2))
+	end
+	return ass.text
+end
+
 function icons.arrow_right(pos_x, pos_y, size)
 	local ass = assdraw.ass_new()
 	local scale = size / 200
@@ -1967,6 +2007,26 @@ function render_speed(this)
 	return ass
 end
 
+function render_menu_button(this)
+	local opacity = this:get_effective_proximity()
+
+	if this.width == 0 or opacity == 0 then return end
+
+	if this.proximity_raw > 0 then opacity = opacity / 2 end
+
+	local ass = assdraw.ass_new()
+	-- Menu button
+	local burger = elements.menu_button
+	ass:new_event()
+	ass:append(icon(
+	'menu_button',
+		burger.ax + (burger.width / 2), burger.ay + (burger.height / 2), burger.width, -- x, y, size
+		0, 0, options.menu_button_border, -- shadow_x, shadow_y, shadow_size
+		'background', options.menu_button_opacity * opacity -- backdrop, opacity
+	))
+	return ass
+end
+
 function render_menu(this)
 	local ass = assdraw.ass_new()
 
@@ -2115,7 +2175,7 @@ function request_render()
 
 	if not state.render_timer:is_enabled() then
 		local now = mp.get_time()
-		local timeout = config.render_delay - (now - state.render_last_time)
+		local timeout = state.render_delay - (now - state.render_last_time)
 		if timeout < 0 then
 			timeout = 0
 		end
@@ -2179,22 +2239,15 @@ elements:add('window_border', Element.new({
 }))
 elements:add('pause_indicator', Element.new({
 	base_icon_opacity = options.pause_indicator == 'flash' and 1 or 0.8,
-	paused = false,
+	paused = state.pause,
 	type = options.pause_indicator,
 	is_manual = options.pause_indicator == 'manual',
 	fadeout_requested = false,
 	opacity = 0,
 	init = function(this)
-		local initial_call = true
 		mp.observe_property('pause', 'bool', function(_, paused)
-			if initial_call then
-				initial_call = false
-				return
-			end
-
-			this.paused = paused
-
 			if options.pause_indicator == 'flash' then
+				if this.paused == paused then return end
 				this:flash()
 			elseif options.pause_indicator == 'static' then
 				this:decide()
@@ -2499,6 +2552,44 @@ if itable_find({'left', 'right'}, options.volume) then
 		end,
 	}))
 end
+if itable_find({'center', 'bottom-bar'}, options.menu_button) then
+	elements:add('menu_button', Element.new({
+		width = 0, height = 0,
+		get_effective_proximity = function(this)
+			if menu:is_open() then return 0 end
+			if is_element_persistent('menu_button') then return 1 end
+			if elements.timeline.proximity_raw == 0 then return 0 end
+			if this.forced_proximity then return this.forced_proximity end
+			if options.menu_button == 'bottom-bar' then
+				local timeline_proximity = elements.timeline.forced_proximity or elements.timeline.proximity
+				return this.forced_proximity or math[cursor.hidden and 'min' or 'max'](this.proximity, timeline_proximity)
+			end
+			return this.proximity
+		end,
+		update_dimensions = function(this)
+			this.width = state.fullormaxed and options.menu_button_size_fullscreen or options.menu_button_size
+			this.height = this.width
+
+			if options.menu_button == 'bottom-bar' then
+				this.ax = 15
+				this.bx = this.ax + this.width
+				this.by = display.height - 10 - elements.window_border.size - elements.timeline.size_max - elements.timeline.top_border
+				this.ay = this.by - this.height
+			else
+				this.ax = round((display.width - this.width) / 2)
+				this.ay = round((display.height - this.height) / 2)
+				this.bx = this.ax + this.width
+				this.by = this.ay + this.height
+			end
+		end,
+		on_display_change = function(this) this:update_dimensions() end,
+		on_prop_border = function(this) this:update_dimensions() end,
+		on_mbtn_left_down = function(this)
+			if this.proximity_raw == 0 then menu_key_binding() end
+		end,
+		render = render_menu_button,
+	}))
+end
 if options.speed then
 	elements:add('speed', Element.new({
 		dragging = nil,
@@ -2733,6 +2824,9 @@ state.context_menu_items = (function()
 
 	for line in io.lines(input_conf_path) do
 		local key, command, title = string.match(line, '%s*([%S]+)%s+(.*)%s#!%s*(.*)')
+		if not key then
+			key, command, title = string.match(line, '%s*([%S]+)%s+(.*)%s#menu:%s*(.*)')
+		end
 		if key then
 			local is_dummy = key:sub(1, 1) == '#'
 			local submenu_id = ''
@@ -2784,6 +2878,12 @@ end
 
 function update_cursor_position()
 	cursor.x, cursor.y = mp.get_mouse_pos()
+	-- mpv reports initial mouse position on linux as (0, 0), which always
+	-- displays the top bar, so we just swap this one coordinate to infinity
+	if cursor.x == 0 and cursor.y == 0 then
+		cursor.x = infinity
+		cursor.y = infinity
+	end
 	update_proximities()
 	request_render()
 end
@@ -2855,6 +2955,20 @@ function load_file_in_current_directory(index)
 
 	if files[index] then
 		mp.commandv("loadfile", utils.join_path(dirname, files[index]))
+	end
+end
+
+function update_render_delay(name, fps)
+	if fps then
+		state.render_delay = 1/fps
+	end
+end
+
+function observe_display_fps(name, fps)
+	if fps then
+		mp.unobserve_property(update_render_delay)
+		mp.unobserve_property(observe_display_fps)
+		mp.observe_property('display-fps', 'native', update_render_delay)
 	end
 end
 
@@ -3048,7 +3162,10 @@ mp.observe_property('demuxer-cache-state', 'native', function(prop, cache_state)
 	end
 	local cache_ranges = cache_state['seekable-ranges']
 	state.cached_ranges = #cache_ranges > 0 and cache_ranges or nil
+	request_render()
 end)
+mp.observe_property('display-fps', 'native', observe_display_fps)
+mp.observe_property('estimated-display-fps', 'native', update_render_delay)
 
 -- CONTROLS
 
@@ -3148,6 +3265,9 @@ end)
 mp.add_key_binding(nil, 'flash-timeline', function()
 	elements.timeline:flash()
 end)
+mp.add_key_binding(nil, 'flash-top-bar', function()
+	elements.top_bar:flash()
+end)
 mp.add_key_binding(nil, 'flash-volume', function()
 	if elements.volume then elements.volume:flash() end
 end)
@@ -3160,29 +3280,31 @@ end)
 mp.add_key_binding(nil, 'decide-pause-indicator', function()
 	elements.pause_indicator:decide()
 end)
-mp.add_key_binding(nil, 'menu', function()
-	if menu:is_open('menu') then
-		menu:close()
-	elseif state.context_menu_items then
-		menu:open(state.context_menu_items, function(command)
-			mp.command(command)
-		end, {type = 'menu'})
-	end
-end)
+function menu_key_binding()
+  if menu:is_open('menu') then
+    menu:close()
+  elseif state.context_menu_items then
+    menu:open(state.context_menu_items, function(command)
+      mp.command(command)
+    end, {type = 'menu'})
+  end
+end
+mp.add_key_binding(nil, 'menu', menu_key_binding)
 mp.add_key_binding(nil, 'load-subtitles', function()
 	if menu:is_open('load-subtitles') then menu:close() return end
 
 	local path = mp.get_property_native('path')
-	if path and not is_protocol(path) then
-		open_file_navigation_menu(
-			serialize_path(path).dirname,
-			function(path) mp.commandv('sub-add', path) end,
-			{
-				type = 'load-subtitles',
-				allowed_types = options.subtitle_types
-			}
-		)
+	if path and is_protocol(path) then
+		path='$HOME'
 	end
+	open_file_navigation_menu(
+		serialize_path(path).dirname,
+		function(path) mp.commandv('sub-add', path) end,
+		{
+			type = 'load-subtitles',
+			allowed_types = options.subtitle_types
+		}
+	)
 end)
 mp.add_key_binding(nil, 'subtitles', create_select_tracklist_type_menu_opener('Subtitles', 'sub', 'sid'))
 mp.add_key_binding(nil, 'audio', create_select_tracklist_type_menu_opener('Audio', 'audio', 'aid'))
@@ -3196,8 +3318,9 @@ mp.add_key_binding(nil, 'playlist', function()
 		local active_item
 		for index, item in ipairs(mp.get_property_native('playlist')) do
 			local is_url = item.filename:find('://')
+			local item_title = type(item.title) == 'string' and #item.title > 0 and item.title or false
 			items[index] = {
-				title = is_url and item.filename or serialize_path(item.filename).basename,
+				title = item_title or (is_url and item.filename or serialize_path(item.filename).basename),
 				hint = tostring(index),
 				value = index
 			}
@@ -3249,12 +3372,12 @@ mp.add_key_binding(nil, 'chapters', function()
 	end
 
 	-- Select first chapter from the end with time lower
-	-- than current playing position (with 100ms leeway).
+	-- than current playing position.
 	function get_selected_chapter_index()
 		local position = mp.get_property_native('playback-time')
 		if not position then return nil end
 		for index = #items, 1, -1 do
-			if position - 0.1 > items[index].value then return index end
+			if position >= items[index].value then return index end
 		end
 	end
 
@@ -3351,7 +3474,7 @@ mp.add_key_binding(nil, 'open-file', function()
 	local active_file
 
 	if path == nil or is_protocol(path) then
-		local path = serialize_path(mp.command_native({'expand-path', '~/'}))
+		local path = serialize_path(mp.command_native({'expand-path', options.default_directory}))
 		directory = path.path
 		active_file = nil
 	else
@@ -3417,10 +3540,6 @@ mp.add_key_binding(nil, 'last-file', function() load_file_in_current_directory(-
 mp.add_key_binding(nil, 'delete-file-next', function()
 	local playlist_count = mp.get_property_native('playlist-count')
 
-	if playlist_count > 1 then
-		mp.commandv('playlist-remove', 'current')
-	end
-
 	local next_file = nil
 
 	local path = mp.get_property_native('path')
@@ -3429,17 +3548,23 @@ mp.add_key_binding(nil, 'delete-file-next', function()
 	if is_local_file then
 		path = normalize_path(path)
 
-		next_file = get_adjacent_file(path, 'forward', options.media_types)
-
 		if menu:is_open('open-file') then
 			elements.menu:delete_value(path)
 		end
 	end
 
-	if next_file then
-		mp.commandv('loadfile', next_file)
+	if playlist_count > 1 then
+		mp.commandv('playlist-remove', 'current')
 	else
-		mp.commandv('stop')
+		if is_local_file then
+			next_file = get_adjacent_file(path, 'forward', options.media_types)
+		end
+
+		if next_file then
+			mp.commandv('loadfile', next_file)
+		else
+			mp.commandv('stop')
+		end
 	end
 
 	if is_local_file then delete_file(path) end
